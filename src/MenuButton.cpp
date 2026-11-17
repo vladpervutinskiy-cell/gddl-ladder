@@ -11,39 +11,45 @@ class $modify(GDDLMenuLayer, MenuLayer) {
         if (!MenuLayer::init()) {
             return false;
         }
-        if (!Mod::get()->getSettingValue<bool>("show-menu-button")) {
+
+        bool enabled = Mod::get()->getSettingValue<bool>("show-menu-button");
+        log::info("GDDL: MenuLayer::init, show-menu-button = {}", enabled);
+        if (!enabled) {
             return true;
         }
-        if (this->getChildByID("gddl-top-menu"_spr)) {
+        if (this->getChildByID("gddl-top-button"_spr)) {
             return true;
         }
 
-        auto sprite = ButtonSprite::create("GDDL TOP", "bigFont.fnt", "GJ_button_01.png", 0.6f);
+        auto sprite = ButtonSprite::create("GDDL TOP", "bigFont.fnt", "GJ_button_01.png", 0.55f);
         auto button = CCMenuItemSpriteExtra::create(sprite, this, menu_selector(GDDLMenuLayer::onTopLevels));
         button->setID("gddl-top-button"_spr);
 
+        // Geode puts empty menus into the main menu for mods to fill, and their
+        // layouts handle the positioning. Using one of them avoids guessing
+        // coordinates (a layer ignores its anchor point, so node-space maths
+        // done by hand ends up off screen).
+        if (auto sideMenu = this->getChildByID("side-menu")) {
+            sideMenu->addChild(button);
+            sideMenu->updateLayout();
+            log::info("GDDL: menu button placed in side-menu");
+            return true;
+        }
+        if (auto bottomMenu = this->getChildByID("bottom-menu")) {
+            bottomMenu->addChild(button);
+            bottomMenu->updateLayout();
+            log::info("GDDL: menu button placed in bottom-menu");
+            return true;
+        }
+
+        // Last resort: our own menu in the upper left corner.
         auto menu = CCMenu::create();
         menu->addChild(button);
         menu->setID("gddl-top-menu"_spr);
-        menu->setPosition(this->findButtonPosition());
-        this->addChild(menu, 6);
-
+        menu->setPosition(60.f, 260.f);
+        this->addChild(menu, 100);
+        log::warn("GDDL: no side-menu or bottom-menu found, placed the button manually");
         return true;
-    }
-
-    /// One row above the achievements icon, at the far left of the bottom row,
-    /// which is usually empty space. Falls back to the middle of the left edge.
-    cocos2d::CCPoint findButtonPosition() {
-        if (auto bottomMenu = this->getChildByID("bottom-menu")) {
-            if (auto achievements = bottomMenu->getChildByID("achievements-button")) {
-                auto world = achievements->convertToWorldSpaceAR({0.f, 0.f});
-                auto position = this->convertToNodeSpaceAR(world);
-                position.y += 46.f;
-                return position;
-            }
-        }
-        auto winSize = cocos2d::CCDirector::get()->getWinSize();
-        return {64.f, winSize.height / 2.f};
     }
 
     void onTopLevels(CCObject*) {

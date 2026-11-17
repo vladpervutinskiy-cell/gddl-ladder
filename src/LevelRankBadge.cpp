@@ -30,13 +30,17 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
             return false;
         }
         if (!Mod::get()->getSettingValue<bool>("show-level-badge")) {
+            log::info("GDDL: level info opened, badge disabled in settings");
             return true;
         }
         // In Geometry Dash every demon (including platformer demons) has 10 stars.
         if (!level || level->m_stars != 10) {
+            log::info("GDDL: level info opened, not a demon (stars = {}), no badge",
+                level ? level->m_stars : -1);
             return true;
         }
 
+        log::info("GDDL: level info opened for demon {}, adding badge", level->m_levelID);
         this->createBadge();
         this->loadRank();
         return true;
