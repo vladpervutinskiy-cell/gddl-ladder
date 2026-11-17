@@ -1,0 +1,42 @@
+{
+	"geode": "5.11.2",
+	"version": "v1.0.0",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081",
+		"ios": "2.2081"
+	},
+	"id": "slesh.gddl-ladder",
+	"name": "GDDL Ladder",
+	"developers": ["slesh"],
+	"description": "Shows the GDDL top levels and this level's place on the GD Demon Ladder (gdladder.com).",
+	"links": {
+		"homepage": "https://gdladder.com"
+	},
+	"tags": [
+		"online",
+		"interface",
+		"utility"
+	],
+	"settings": {
+		"show-level-badge": {
+			"type": "bool",
+			"default": true,
+			"name": "Rank badge on level info",
+			"description": "Show this demon's place in the GDDL top on its level info screen. Click the badge to open the level page on gdladder.com."
+		},
+		"show-menu-button": {
+			"type": "bool",
+			"default": true,
+			"name": "GDDL Top button in the main menu",
+			"description": "Adds a button that opens the GDDL top levels list."
+		},
+		"levels-per-page": {
+			"type": "int",
+			"default": 10,
+			"name": "Levels per page",
+			"description": "How many levels to show on one page of the top list (5 - 12)."
+		}
+	}
+}

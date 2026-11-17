@@ -1,0 +1,389 @@
+#include "TopLevelsPopup.hpp"
+
+#include <Geode/utils/web.hpp>
+#include <fmt/format.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <utility>
+
+using namespace geode::prelude;
+
+namespace {
+    constexpr float MAX_POPUP_WIDTH = 440.f;
+    constexpr float ROW_HEIGHT = 16.f;
+    constexpr float ROWS_BOTTOM = 38.f;
+    constexpr float SIDE_MARGIN = 20.f;
+    constexpr int MIN_PER_PAGE = 5;
+    constexpr int MAX_PER_PAGE = 12;
+
+    cocos2d::ccColor3B const RANK_COLOR{255, 214, 92};
+    cocos2d::ccColor3B const HEADER_COLOR{190, 190, 190};
+    cocos2d::ccColor3B const MUTED_COLOR{200, 200, 200};
+
+    cocos2d::ccColor3B lerpColor(cocos2d::ccColor3B const& from, cocos2d::ccColor3B const& to, float t) {
+        auto mix = [t](unsigned char a, unsigned char b) -> unsigned char {
+            float value = static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t;
+            return static_cast<unsigned char>(std::clamp(std::lround(value), 0L, 255L));
+        };
+        return {mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b)};
+    }
+
+    /// Green for easy demons, yellow in the middle, red for the hardest ones.
+    cocos2d::ccColor3B ratingColor(double rating) {
+        float t = std::clamp(static_cast<float>(rating / 39.0), 0.f, 1.f);
+        cocos2d::ccColor3B const low{120, 230, 120};
+        cocos2d::ccColor3B const mid{255, 235, 120};
+        cocos2d::ccColor3B const high{255, 110, 110};
+        if (t < 0.5f) {
+            return lerpColor(low, mid, t * 2.f);
+        }
+        return lerpColor(mid, high, (t - 0.5f) * 2.f);
+    }
+
+    /// Three columns: rank, "level - creator", rating. Coordinates are in the
+    /// 0..rowWidth space of the node; CCMenuItemSprite anchors item contents
+    /// at their bottom-left corner.
+    cocos2d::CCNode* buildRow(
+        float rowWidth,
+        std::string const& rankText,
+        std::string const& mainText,
+        std::string const& rightText,
+        cocos2d::ccColor3B rankColor,
+        cocos2d::ccColor3B mainColor,
+        cocos2d::ccColor3B rightColor
+    ) {
+        auto node = cocos2d::CCNode::create();
+        node->setContentSize({rowWidth, ROW_HEIGHT});
+
+        auto addLabel = [&](std::string const& value, float x, float anchorX, cocos2d::ccColor3B color) {
+            auto label = cocos2d::CCLabelBMFont::create(value.c_str(), "chatFont.fnt");
+            label->setAnchorPoint({anchorX, 0.5f});
+            label->setPosition({x, ROW_HEIGHT / 2.f});
+            label->setScale(0.7f);
+            label->setColor(color);
+            node->addChild(label);
+        };
+
+        addLabel(rankText, 2.f, 0.f, rankColor);
+        addLabel(mainText, 62.f, 0.f, mainColor);
+        addLabel(rightText, rowWidth - 2.f, 1.f, rightColor);
+        return node;
+    }
+}
+
+GDDLTopPopup* GDDLTopPopup::create() {
+    auto ret = new GDDLTopPopup();
+    if (ret->init()) {
+        ret->autorelease();
+        return ret;
+    }
+    delete ret;
+    return nullptr;
+}
+
+void GDDLTopPopup::open() {
+    if (auto scene = cocos2d::CCDirector::get()->getRunningScene()) {
+        if (scene->getChildByIDRecursive("gddl-top-popup"_spr)) {
+            return;
+        }
+    }
+    if (auto popup = GDDLTopPopup::create()) {
+        popup->show();
+    }
+}
+
+bool GDDLTopPopup::init() {
+    m_perPage = static_cast<int>(Mod::get()->getSettingValue<std::int64_t>("levels-per-page"));
+    m_perPage = std::clamp(m_perPage, MIN_PER_PAGE, MAX_PER_PAGE);
+
+    auto winSize = cocos2d::CCDirector::get()->getWinSize();
+    float popupWidth = std::min(MAX_POPUP_WIDTH, winSize.width - 16.f);
+    m_rowWidth = popupWidth - SIDE_MARGIN * 2.f;
+
+    float rowsHeight = m_perPage * ROW_HEIGHT;
+    float height = 96.f + rowsHeight;
+
+    if (!Popup::init(popupWidth, height)) {
+        return false;
+    }
+
+    this->setID("gddl-top-popup"_spr);
+    this->setTitle("GDDL - Top Levels");
+
+    m_header = buildRow(m_rowWidth, "#", "LEVEL - CREATOR", "GDDL", HEADER_COLOR, HEADER_COLOR, HEADER_COLOR);
+    m_header->setID("gddl-top-header"_spr);
+    m_header->setPosition({SIDE_MARGIN, ROWS_BOTTOM + rowsHeight + 2.f});
+    m_mainLayer->addChild(m_header);
+
+    m_rowsMenu = CCMenu::create();
+    m_rowsMenu->setAnchorPoint({0.f, 0.f});
+    m_rowsMenu->setContentSize({m_rowWidth, rowsHeight});
+    m_rowsMenu->setPosition({SIDE_MARGIN, ROWS_BOTTOM});
+    m_rowsMenu->setID("gddl-top-rows"_spr);
+    m_mainLayer->addChild(m_rowsMenu);
+
+    m_info = CCLabelBMFont::create("Loading...", "chatFont.fnt");
+    m_info->setScale(0.65f);
+    m_info->setColor(MUTED_COLOR);
+
+    m_infoRoot = CCNode::create();
+    m_infoRoot->addChild(m_info);
+    this->setInfoText("Loading...");
+
+    auto infoItem = CCMenuItemSpriteExtra::create(m_infoRoot, this, menu_selector(GDDLTopPopup::onReload));
+    infoItem->setPosition({popupWidth / 2.f, 20.f});
+    m_buttonMenu->addChild(infoItem);
+
+    auto prevSprite = ButtonSprite::create("PREV", "bigFont.fnt", "GJ_button_02.png", 0.55f);
+    m_prevBtn = CCMenuItemSpriteExtra::create(prevSprite, this, menu_selector(GDDLTopPopup::onPrev));
+    m_prevBtn->setPosition({48.f, 20.f});
+    m_buttonMenu->addChild(m_prevBtn);
+
+    auto nextSprite = ButtonSprite::create("NEXT", "bigFont.fnt", "GJ_button_02.png", 0.55f);
+    m_nextBtn = CCMenuItemSpriteExtra::create(nextSprite, this, menu_selector(GDDLTopPopup::onNext));
+    m_nextBtn->setPosition({104.f, 20.f});
+    m_buttonMenu->addChild(m_nextBtn);
+
+    auto siteSprite = ButtonSprite::create("OPEN GDDL", "bigFont.fnt", "GJ_button_01.png", 0.5f);
+    auto siteBtn = CCMenuItemSpriteExtra::create(siteSprite, this, menu_selector(GDDLTopPopup::onOpenSite));
+    siteBtn->setPosition({popupWidth - 62.f, 20.f});
+    m_buttonMenu->addChild(siteBtn);
+
+    this->loadPage(0, true);
+    return true;
+}
+
+void GDDLTopPopup::loadPage(int page, bool useCache) {
+    if (page < 0) {
+        page = 0;
+    }
+
+    if (useCache) {
+        if (auto cached = gddl::Client::get().getPage(page, m_perPage)) {
+            this->applyPage(*cached);
+            return;
+        }
+    }
+
+    m_page = page;
+    m_loading = true;
+    this->updateControls();
+
+    auto request = gddl::makeRequest();
+    request.param("excludeUnrated", "true");
+    request.param("sort", "rating");
+    request.param("sortDirection", "desc");
+    request.param("limit", std::to_string(m_perPage));
+    request.param("page", std::to_string(page));
+
+    m_listener.spawn(
+        request.get(fmt::format("{}/levels", gddl::API_BASE), Mod::get()),
+        [this, page](web::WebResponse response) {
+            this->onPageResponse(std::move(response), page);
+        }
+    );
+}
+
+void GDDLTopPopup::onPageResponse(web::WebResponse response, int page) {
+    if (page != m_page) {
+        return;
+    }
+
+    auto jsonResult = response.json();
+    if (!response.ok() || !jsonResult.isOk()) {
+        this->showError();
+        return;
+    }
+
+    auto json = jsonResult.unwrap();
+    if (!json.isObject()) {
+        this->showError();
+        return;
+    }
+
+    auto rowsResult = json["data"].asArray();
+    if (rowsResult.isErr()) {
+        this->showError();
+        return;
+    }
+
+    gddl::Page data;
+    data.page = page;
+    data.limit = m_perPage;
+    data.total = static_cast<int>(json["total"].asInt().unwrapOr(0));
+
+    for (auto const& entry : rowsResult.unwrap()) {
+        gddl::Row row;
+        row.id = static_cast<int>(entry["id"].asInt().unwrapOr(0));
+        row.rating = entry["rating"].asDouble().unwrapOr(0.0);
+        row.name = entry["name"].asString().unwrapOr(std::string("?"));
+        row.author = entry["publisherName"].asString().unwrapOr(std::string("?"));
+        if (row.id <= 0) {
+            continue;
+        }
+        data.rows.push_back(std::move(row));
+    }
+
+    // The first page always starts at place 1. For other pages the place of
+    // the first row is the number of levels rated strictly higher than it,
+    // which we get by querying with minRating = nextafter(firstRating).
+    if (page == 0 || data.rows.empty() || data.rows.front().rating >= 39.0) {
+        this->finalizePage(std::move(data), 1);
+        return;
+    }
+
+    auto request = gddl::makeRequest();
+    request.param("excludeUnrated", "true");
+    request.param("minRating", fmt::format("{}", gddl::nextRating(data.rows.front().rating)));
+    request.param("limit", "1");
+    request.param("page", "0");
+
+    m_boundaryListener.spawn(
+        request.get(fmt::format("{}/levels", gddl::API_BASE), Mod::get()),
+        [this, data = std::move(data)](web::WebResponse boundaryResponse) mutable {
+            int baseRank = 0;
+            auto boundaryResult = boundaryResponse.json();
+            if (boundaryResponse.ok() && boundaryResult.isOk()) {
+                auto boundaryJson = boundaryResult.unwrap();
+                if (boundaryJson.contains("total")) {
+                    baseRank = static_cast<int>(boundaryJson["total"].asInt().unwrapOr(0)) + 1;
+                }
+            }
+            // Fallback if the extra request failed: the list is still sorted,
+            // so page * limit + 1 keeps the UI usable.
+            if (baseRank <= 0) {
+                baseRank = data.page * std::max(data.limit, 1) + 1;
+            }
+            if (data.page == this->m_page) {
+                this->finalizePage(std::move(data), baseRank);
+            }
+        }
+    );
+}
+
+void GDDLTopPopup::finalizePage(gddl::Page data, int baseRank) {
+    // Ranks use competition ranking: every level gets "number of levels rated
+    // strictly higher + 1", so tied levels share a place.
+    //
+    // Within one page that is simply the global position of the first row of
+    // the group: `page * perPage + 1 + groupStart`. A group that starts before
+    // this page (the previous page ended in the middle of it) is given the
+    // base rank that was queried from the API instead, so its rows keep the
+    // place they have on the previous page.
+    int posFirst = data.page * std::max(m_perPage, 1) + 1;
+    int groupStart = 0;
+    for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
+        auto& row = data.rows[i];
+        if (i > 0 && row.rating != data.rows[i - 1].rating) {
+            groupStart = i;
+        }
+        row.rank = groupStart == 0 ? baseRank : posFirst + groupStart;
+    }
+    data.limit = m_perPage;
+
+    gddl::Client::get().storePage(data);
+    this->applyPage(data);
+}
+
+void GDDLTopPopup::applyPage(gddl::Page const& data) {
+    m_loading = false;
+    m_page = data.page;
+    m_rowCount = static_cast<int>(data.rows.size());
+    if (data.total > 0) {
+        m_total = data.total;
+    }
+
+    m_rowsMenu->removeAllChildren();
+
+    float rowsHeight = m_perPage * ROW_HEIGHT;
+    for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
+        auto const& row = data.rows[i];
+        auto color = ratingColor(row.rating);
+        auto content = buildRow(
+            m_rowWidth,
+            fmt::format("#{}", row.rank),
+            fmt::format("{}  -  {}", gddl::truncate(row.name, 30), gddl::truncate(row.author, 16)),
+            fmt::format("{:.2f}", row.rating),
+            RANK_COLOR,
+            color,
+            color
+        );
+
+        auto item = CCMenuItemSpriteExtra::create(content, this, menu_selector(GDDLTopPopup::onRow));
+        item->setTag(row.id);
+        item->setPosition({m_rowWidth / 2.f, rowsHeight - ROW_HEIGHT / 2.f - i * ROW_HEIGHT});
+        m_rowsMenu->addChild(item);
+    }
+
+    this->updateControls();
+}
+
+void GDDLTopPopup::setInfoText(std::string const& text) {
+    if (!m_info || !m_infoRoot) {
+        return;
+    }
+    m_info->setString(text.c_str());
+    auto size = m_info->getScaledContentSize();
+    m_infoRoot->setContentSize(size);
+    m_info->setPosition({size.width / 2.f, size.height / 2.f});
+    if (auto item = typeinfo_cast<CCMenuItemSpriteExtra*>(m_infoRoot->getParent())) {
+        item->setContentSize(size);
+    }
+}
+
+void GDDLTopPopup::updateControls() {
+    int pages = m_total > 0 ? (m_total + m_perPage - 1) / m_perPage : 0;
+
+    if (m_loading) {
+        this->setInfoText("Loading...");
+    } else if (m_rowCount == 0) {
+        this->setInfoText("No levels on this page");
+    } else {
+        this->setInfoText(
+            fmt::format("{} levels | page {}/{}", m_total, m_page + 1, std::max(pages, 1))
+        );
+    }
+
+    m_prevBtn->setEnabled(!m_loading && m_page > 0);
+    m_nextBtn->setEnabled(!m_loading && m_rowCount > 0 && m_page + 1 < pages);
+}
+
+void GDDLTopPopup::showError() {
+    m_loading = false;
+    m_rowCount = 0;
+    m_rowsMenu->removeAllChildren();
+    this->setInfoText("Failed to load - press here to retry");
+    m_prevBtn->setEnabled(m_page > 0);
+    m_nextBtn->setEnabled(false);
+}
+
+void GDDLTopPopup::onPrev(CCObject*) {
+    if (m_page > 0) {
+        this->loadPage(m_page - 1, true);
+    }
+}
+
+void GDDLTopPopup::onNext(CCObject*) {
+    this->loadPage(m_page + 1, true);
+}
+
+void GDDLTopPopup::onReload(CCObject*) {
+    this->loadPage(m_page, false);
+}
+
+void GDDLTopPopup::onOpenSite(CCObject*) {
+    std::string url = gddl::SITE_BASE;
+    geode::utils::web::openLinkInBrowser(url);
+}
+
+void GDDLTopPopup::onRow(CCObject* sender) {
+    auto node = typeinfo_cast<CCNode*>(sender);
+    if (!node) {
+        return;
+    }
+    std::string url = gddl::siteLevelUrl(node->getTag());
+    geode::utils::web::openLinkInBrowser(url);
+}
