@@ -48,6 +48,7 @@ namespace {
     /// at their bottom-left corner.
     cocos2d::CCNode* buildRow(
         float rowWidth,
+        int levelID,
         std::string const& rankText,
         std::string const& mainText,
         std::string const& rightText,
@@ -65,12 +66,26 @@ namespace {
             label->setScale(0.7f);
             label->setColor(color);
             node->addChild(label);
+            return label;
         };
 
-        addLabel(rankText, 2.f, 0.f, rankColor);
+        auto rank = addLabel(rankText, 2.f, 0.f, rankColor);
+        // The place arrives later than the list itself, so the label is found
+        // back by this ID to be filled in.
+        rank->setID(fmt::format("gddl-top-rank-{}", levelID));
         addLabel(mainText, 62.f, 0.f, mainColor);
         addLabel(rightText, rowWidth - 2.f, 1.f, rightColor);
         return node;
+    }
+
+    std::string rankLabel(gddl::RankInfo const& info) {
+        if (!info.found) {
+            return "#-";
+        }
+        if (info.rank <= 0) {
+            return "#?";
+        }
+        return fmt::format("#{}", info.rank);
     }
 }
 
@@ -113,7 +128,7 @@ bool GDDLTopPopup::init() {
     this->setID("gddl-top-popup"_spr);
     this->setTitle("GDDL - Top Levels");
 
-    m_header = buildRow(m_rowWidth, "#", "LEVEL - CREATOR", "GDDL", HEADER_COLOR, HEADER_COLOR, HEADER_COLOR);
+    m_header = buildRow(m_rowWidth, 0, "#", "LEVEL - CREATOR", "GDDL", HEADER_COLOR, HEADER_COLOR, HEADER_COLOR);
     m_header->setID("gddl-top-header"_spr);
     m_header->setPosition({SIDE_MARGIN, ROWS_BOTTOM + rowsHeight + 2.f});
     m_mainLayer->addChild(m_header);
@@ -227,61 +242,13 @@ void GDDLTopPopup::onPageResponse(web::WebResponse response, int page) {
         data.rows.push_back(std::move(row));
     }
 
-    // The first page always starts at place 1. For other pages the place of
-    // the first row is the number of levels rated strictly higher than it,
-    // which we get by querying with minRating = nextafter(firstRating).
-    if (page == 0 || data.rows.empty() || data.rows.front().rating >= 39.0) {
-        this->finalizePage(std::move(data), 1);
-        return;
-    }
-
-    auto request = gddl::makeRequest();
-    request.param("excludeUnrated", "true");
-    request.param("minRating", fmt::format("{}", gddl::nextRating(data.rows.front().rating)));
-    request.param("limit", "1");
-    request.param("page", "0");
-
-    m_boundaryListener.spawn(
-        request.get(fmt::format("{}/levels", gddl::API_BASE), Mod::get()),
-        [this, data = std::move(data)](web::WebResponse boundaryResponse) mutable {
-            int baseRank = 0;
-            auto boundaryResult = boundaryResponse.json();
-            if (boundaryResponse.ok() && boundaryResult.isOk()) {
-                auto boundaryJson = boundaryResult.unwrap();
-                if (boundaryJson.contains("total")) {
-                    baseRank = static_cast<int>(boundaryJson["total"].asInt().unwrapOr(0)) + 1;
-                }
-            }
-            // Fallback if the extra request failed: the list is still sorted,
-            // so page * limit + 1 keeps the UI usable.
-            if (baseRank <= 0) {
-                baseRank = data.page * std::max(data.limit, 1) + 1;
-            }
-            if (data.page == this->m_page) {
-                this->finalizePage(std::move(data), baseRank);
-            }
-        }
-    );
+    // Every row gets the place from the level document, so no place has to be
+    // derived from the ratings (the site counts places over a wider set of
+    // levels than the public list returns).
+    this->finalizePage(std::move(data));
 }
 
-void GDDLTopPopup::finalizePage(gddl::Page data, int baseRank) {
-    // Ranks use competition ranking: every level gets "number of levels rated
-    // strictly higher + 1", so tied levels share a place.
-    //
-    // Within one page that is simply the global position of the first row of
-    // the group: `page * perPage + 1 + groupStart`. A group that starts before
-    // this page (the previous page ended in the middle of it) is given the
-    // base rank that was queried from the API instead, so its rows keep the
-    // place they have on the previous page.
-    int posFirst = data.page * std::max(m_perPage, 1) + 1;
-    int groupStart = 0;
-    for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
-        auto& row = data.rows[i];
-        if (i > 0 && row.rating != data.rows[i - 1].rating) {
-            groupStart = i;
-        }
-        row.rank = groupStart == 0 ? baseRank : posFirst + groupStart;
-    }
+void GDDLTopPopup::finalizePage(gddl::Page data) {
     data.limit = m_perPage;
 
     gddl::Client::get().storePage(data);
@@ -297,14 +264,25 @@ void GDDLTopPopup::applyPage(gddl::Page const& data) {
     }
 
     m_rowsMenu->removeAllChildren();
+    m_rankListeners.clear();
 
     float rowsHeight = m_perPage * ROW_HEIGHT;
+    std::vector<int> missing;
     for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
         auto const& row = data.rows[i];
         auto color = ratingColor(row.rating);
+        auto cached = gddl::Client::get().getRank(row.id);
+        std::string rankText = "#..";
+        if (cached) {
+            rankText = rankLabel(*cached);
+        } else {
+            missing.push_back(row.id);
+        }
+
         auto content = buildRow(
             m_rowWidth,
-            fmt::format("#{}", row.rank),
+            row.id,
+            rankText,
             fmt::format("{}  -  {}", gddl::truncate(row.name, 30), gddl::truncate(row.author, 16)),
             fmt::format("{:.2f}", row.rating),
             RANK_COLOR,
@@ -319,6 +297,46 @@ void GDDLTopPopup::applyPage(gddl::Page const& data) {
     }
 
     this->updateControls();
+    this->requestRanks(std::move(missing));
+}
+
+void GDDLTopPopup::requestRanks(std::vector<int> levelIDs) {
+    for (int levelID : levelIDs) {
+        auto request = gddl::makeRequest();
+        m_rankListeners.emplace_back();
+        m_rankListeners.back().spawn(
+            request.get(gddl::apiLevelUrl(levelID), Mod::get()),
+            [this, levelID](web::WebResponse response) {
+                this->onRankResponse(std::move(response), levelID);
+            }
+        );
+    }
+}
+
+void GDDLTopPopup::onRankResponse(web::WebResponse response, int levelID) {
+    auto jsonResult = response.json();
+    if (!response.ok() || !jsonResult.isOk()) {
+        this->setRowRank(levelID, "#?");
+        return;
+    }
+
+    auto info = gddl::parseLevelInfo(jsonResult.unwrap());
+    gddl::Client::get().storeRank(levelID, info);
+    // The popup may have been closed or the page may have changed meanwhile;
+    // setRowRank ignores unknown IDs in that case.
+    this->setRowRank(levelID, rankLabel(info));
+}
+
+void GDDLTopPopup::setRowRank(int levelID, std::string const& text) {
+    if (!m_rowsMenu) {
+        return;
+    }
+    auto label = typeinfo_cast<cocos2d::CCLabelBMFont*>(
+        m_rowsMenu->getChildByIDRecursive(fmt::format("gddl-top-rank-{}", levelID))
+    );
+    if (label) {
+        label->setString(text.c_str());
+    }
 }
 
 void GDDLTopPopup::setInfoText(std::string const& text) {

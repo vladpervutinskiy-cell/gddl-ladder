@@ -18,7 +18,6 @@ namespace {
 class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
     struct Fields {
         async::TaskHolder<web::WebResponse> levelListener;
-        async::TaskHolder<web::WebResponse> countListener;
         cocos2d::CCLabelBMFont* text = nullptr;
         cocos2d::CCLabelBMFont* shadow = nullptr;
         cocos2d::CCNode* root = nullptr;
@@ -151,62 +150,9 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
             return;
         }
 
-        auto json = jsonResult.unwrap();
-        auto rating = json["Rating"].asDouble().unwrapOr(0.0);
-        if (!json.contains("Rating") || rating <= 0.0) {
-            // The API returns an empty object for levels that are not rated.
-            gddl::RankInfo info;
-            gddl::Client::get().storeRank(levelID, info);
-            this->setBadgeText("GDDL not rated", BADGE_MUTED);
-            return;
-        }
-
-        if (rating >= 39.0) {
-            // 39 is the highest tier, so it is always shared first place.
-            gddl::RankInfo info;
-            info.found = true;
-            info.rating = rating;
-            info.rank = 1;
-            gddl::Client::get().storeRank(levelID, info);
-            this->applyRank(info);
-            return;
-        }
-
-        // Number of levels rated strictly higher than this one is equal to the
-        // number of levels whose rating is >= the next representable double.
-        auto request = gddl::makeRequest();
-        request.param("excludeUnrated", "true");
-        request.param("minRating", fmt::format("{}", gddl::nextRating(rating)));
-        request.param("limit", "1");
-        request.param("page", "0");
-
-        m_fields->countListener.spawn(
-            request.get(fmt::format("{}/levels", gddl::API_BASE), Mod::get()),
-            [this, levelID, rating](web::WebResponse countResponse) {
-                this->onCountResponse(std::move(countResponse), levelID, rating);
-            }
-        );
-    }
-
-    void onCountResponse(web::WebResponse response, int levelID, double rating) {
-        int rank = 0;
-        auto jsonResult = response.json();
-        if (response.ok() && jsonResult.isOk()) {
-            auto json = jsonResult.unwrap();
-            if (json.contains("total")) {
-                rank = static_cast<int>(json["total"].asInt().unwrapOr(0)) + 1;
-            }
-        }
-
-        if (rank <= 0) {
-            this->setBadgeText("GDDL ?", BADGE_MUTED);
-            return;
-        }
-
-        gddl::RankInfo info;
-        info.found = true;
-        info.rating = rating;
-        info.rank = rank;
+        // The level document has both the rating and the place on the ladder,
+        // so one request is enough.
+        auto info = gddl::parseLevelInfo(jsonResult.unwrap());
         gddl::Client::get().storeRank(levelID, info);
         this->applyRank(info);
     }
@@ -214,6 +160,10 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
     void applyRank(gddl::RankInfo const& info) {
         if (!info.found) {
             this->setBadgeText("GDDL not rated", BADGE_MUTED);
+            return;
+        }
+        if (info.rank <= 0) {
+            this->setBadgeText(fmt::format("GDDL {:.2f}", info.rating), BADGE_COLOR);
             return;
         }
         this->setBadgeText(fmt::format("GDDL #{} ({:.2f})", info.rank, info.rating), BADGE_COLOR);

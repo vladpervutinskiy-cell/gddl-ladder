@@ -2,8 +2,6 @@
 
 #include <fmt/format.h>
 
-#include <cmath>
-#include <limits>
 #include <utility>
 
 using namespace geode::prelude;
@@ -29,6 +27,22 @@ namespace gddl {
         return fmt::format("{}/levels/{}", API_BASE, levelID);
     }
 
+    RankInfo parseLevelInfo(matjson::Value const& json) {
+        RankInfo info;
+        // The API answers with an empty object for levels that are not rated.
+        if (!json.contains("Rating")) {
+            return info;
+        }
+        info.rating = json["Rating"].asDouble().unwrapOr(0.0);
+        if (info.rating <= 0.0) {
+            return info;
+        }
+        info.found = true;
+        // Same value the "Position" field of the level page is rendered from.
+        info.rank = static_cast<int>(json["DifficultyIndex"].asDouble().unwrapOr(0.0));
+        return info;
+    }
+
     std::string siteLevelUrl(int levelID) {
         return fmt::format("{}/level/{}", SITE_BASE, levelID);
     }
@@ -41,10 +55,6 @@ namespace gddl {
             return text.substr(0, maxLength);
         }
         return text.substr(0, maxLength - 2) + "..";
-    }
-
-    double nextRating(double rating) {
-        return std::nextafter(rating, std::numeric_limits<double>::infinity());
     }
 
     Client& Client::get() {

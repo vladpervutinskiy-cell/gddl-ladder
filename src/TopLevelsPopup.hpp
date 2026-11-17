@@ -5,6 +5,8 @@
 #include <Geode/ui/Popup.hpp>
 #include <Geode/utils/web.hpp>
 
+#include <vector>
+
 #include "GDDL.hpp"
 
 /// Paginated list of the hardest rated levels on gdladder.com.
@@ -33,12 +35,16 @@ private:
     bool m_loading = false;
 
     geode::async::TaskHolder<geode::utils::web::WebResponse> m_listener;
-    geode::async::TaskHolder<geode::utils::web::WebResponse> m_boundaryListener;
+    /// One holder per row whose place is still being fetched.
+    std::vector<geode::async::TaskHolder<geode::utils::web::WebResponse>> m_rankListeners;
 
     void loadPage(int page, bool useCache);
     void onPageResponse(geode::utils::web::WebResponse response, int page);
-    void finalizePage(gddl::Page data, int baseRank);
+    void finalizePage(gddl::Page data);
     void applyPage(gddl::Page const& data);
+    void requestRanks(std::vector<int> levelIDs);
+    void onRankResponse(geode::utils::web::WebResponse response, int levelID);
+    void setRowRank(int levelID, std::string const& text);
     void updateControls();
     void setInfoText(std::string const& text);
     void showError();

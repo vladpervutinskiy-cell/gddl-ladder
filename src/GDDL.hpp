@@ -23,14 +23,14 @@ namespace gddl {
         bool found = false;
         /// GDDL rating (a float between 1 and 39).
         double rating = 0.0;
-        /// 1-based place in the top of all rated levels. Levels with the same
-        /// rating share the best place (competition ranking).
+        /// Place on the ladder exactly as the site shows it: the "Position"
+        /// field of the level page (`DifficultyIndex` in the API). Levels with
+        /// the same rating share the place. 0 if the site did not send it.
         int rank = 0;
     };
 
     /// One row of the top levels list.
     struct Row {
-        int rank = 0;
         int id = 0;
         double rating = 0.0;
         std::string name;
@@ -48,14 +48,15 @@ namespace gddl {
     /// Builds a request with a custom user agent and a timeout.
     geode::utils::web::WebRequest makeRequest();
 
+    /// Reads the body of `GET /api/levels/{id}` (the same document the level
+    /// page of the site is built from).
+    RankInfo parseLevelInfo(matjson::Value const& json);
+
     std::string apiLevelUrl(int levelID);
     std::string siteLevelUrl(int levelID);
 
     /// Shortens `text` to `maxLength` characters, appending ".." when cut.
     std::string truncate(std::string const& text, std::size_t maxLength);
-
-    /// Smallest double strictly greater than `rating`.
-    double nextRating(double rating);
 
     /// In-memory cache shared by all UI elements.
     class Client {
