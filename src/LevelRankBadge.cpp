@@ -2,24 +2,31 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/LevelInfoLayer.hpp>
+#include <Geode/ui/NineSlice.hpp>
 #include <Geode/utils/web.hpp>
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <string>
 
 using namespace geode::prelude;
 
 namespace {
     constexpr cocos2d::ccColor3B BADGE_COLOR{255, 214, 92};
     constexpr cocos2d::ccColor3B BADGE_MUTED{190, 190, 190};
+    constexpr float BADGE_SCALE = 0.75f;
+    constexpr float PAD_X = 8.f;
+    constexpr float PAD_Y = 5.f;
+    constexpr float PART_GAP = 4.f;
 }
 
 /// Adds a clickable "GDDL #<place>" badge to the info screen of demon levels.
 class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
     struct Fields {
         async::TaskHolder<web::WebResponse> levelListener;
-        cocos2d::CCLabelBMFont* text = nullptr;
-        cocos2d::CCLabelBMFont* shadow = nullptr;
+        CCLabelBMFont* main = nullptr;
+        CCLabelBMFont* extra = nullptr;
+        NineSlice* panel = nullptr;
         cocos2d::CCNode* root = nullptr;
         cocos2d::CCMenu* menu = nullptr;
     };
@@ -45,20 +52,27 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
         return true;
     }
 
+    /// A small dark plate with the gold "GDDL #890" and the rating in the
+    /// colour of its tier, sitting right below the star counter.
     void createBadge() {
-        auto text = CCLabelBMFont::create("GDDL ...", "chatFont.fnt");
-        text->setScale(0.7f);
-        text->setColor(BADGE_COLOR);
+        auto root = cocos2d::CCNode::create();
 
-        auto shadow = CCLabelBMFont::create("GDDL ...", "chatFont.fnt");
-        shadow->setScale(0.7f);
-        shadow->setColor({0, 0, 0});
-        shadow->setOpacity(170);
+        auto panel = NineSlice::createWithSpriteFrameName(
+            "GJ_square01.png", NineSlice::Insets{8.f, 8.f, 8.f, 8.f}
+        );
+        panel->setColor({0, 0, 0});
+        panel->setOpacity(150);
+        root->addChild(panel);
 
-        auto root = CCNode::create();
-        root->setContentSize({44.f, 14.f});
-        root->addChild(shadow);
-        root->addChild(text);
+        auto main = CCLabelBMFont::create("GDDL ...", "chatFont.fnt");
+        main->setScale(BADGE_SCALE);
+        main->setAnchorPoint({0.f, 0.5f});
+        root->addChild(main);
+
+        auto extra = CCLabelBMFont::create("", "chatFont.fnt");
+        extra->setScale(BADGE_SCALE);
+        extra->setAnchorPoint({0.f, 0.5f});
+        root->addChild(extra);
 
         auto item = CCMenuItemSpriteExtra::create(root, this, menu_selector(GDDLLevelInfoLayer::onBadgeClick));
         item->setID("gddl-rank-badge"_spr);
@@ -68,8 +82,9 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
         menu->setID("gddl-rank-menu"_spr);
         this->addChild(menu, 20);
 
-        m_fields->text = text;
-        m_fields->shadow = shadow;
+        m_fields->main = main;
+        m_fields->extra = extra;
+        m_fields->panel = panel;
         m_fields->root = root;
         m_fields->menu = menu;
 
@@ -89,30 +104,48 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
         }
         menu->setPosition(position);
 
-        this->setBadgeText("GDDL ...", BADGE_MUTED);
+        this->setBadgeParts("GDDL ...", "", BADGE_MUTED, BADGE_MUTED);
     }
 
-    void setBadgeText(std::string const& value, cocos2d::ccColor3B const& color) {
-        auto text = m_fields->text;
-        auto shadow = m_fields->shadow;
+    /// Sets the two halves of the badge text ("GDDL #890" and "(23.97)") and
+    /// resizes everything to fit.
+    void setBadgeParts(
+        std::string const& mainText,
+        std::string const& extraText,
+        cocos2d::ccColor3B const& mainColor,
+        cocos2d::ccColor3B const& extraColor
+    ) {
+        auto main = m_fields->main;
+        auto extra = m_fields->extra;
+        auto panel = m_fields->panel;
         auto root = m_fields->root;
-        if (!text || !shadow || !root) {
+        if (!main || !extra || !panel || !root) {
             return;
         }
 
-        text->setString(value.c_str());
-        text->setColor(color);
-        shadow->setString(value.c_str());
+        main->setString(mainText.c_str());
+        main->setColor(mainColor);
+        extra->setString(extraText.c_str());
+        extra->setColor(extraColor);
+
+        auto mainSize = main->getScaledContentSize();
+        auto extraSize = extra->getScaledContentSize();
+        float gap = extraSize.width > 0.f ? PART_GAP : 0.f;
+        float textHeight = std::max(mainSize.height, extraSize.height);
+
+        cocos2d::CCSize size{
+            mainSize.width + gap + extraSize.width + PAD_X * 2.f,
+            textHeight + PAD_Y * 2.f
+        };
+
+        root->setContentSize(size);
+        panel->setContentSize(size);
+        panel->setPosition({size.width / 2.f, size.height / 2.f});
+        main->setPosition({PAD_X, size.height / 2.f});
+        extra->setPosition({PAD_X + mainSize.width + gap, size.height / 2.f});
 
         // The item anchors its content at the bottom-left corner and stretches
-        // the clickable area to the content size, so the labels are centered
-        // inside 0..size.
-        auto labelSize = text->getScaledContentSize();
-        cocos2d::CCSize size{labelSize.width + 12.f, labelSize.height + 6.f};
-        root->setContentSize(size);
-        text->setPosition({size.width / 2.f, size.height / 2.f});
-        shadow->setPosition({size.width / 2.f + 1.5f, size.height / 2.f - 1.5f});
-
+        // the clickable area to the content size.
         if (auto item = typeinfo_cast<CCMenuItemSpriteExtra*>(root->getParent())) {
             item->setContentSize(size);
         }
@@ -146,7 +179,7 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
     void onLevelResponse(web::WebResponse response, int levelID) {
         auto jsonResult = response.json();
         if (!response.ok() || !jsonResult.isOk()) {
-            this->setBadgeText("GDDL ?", BADGE_MUTED);
+            this->setBadgeParts("GDDL ?", "", BADGE_MUTED, BADGE_MUTED);
             return;
         }
 
@@ -159,14 +192,17 @@ class $modify(GDDLLevelInfoLayer, LevelInfoLayer) {
 
     void applyRank(gddl::RankInfo const& info) {
         if (!info.found) {
-            this->setBadgeText("GDDL not rated", BADGE_MUTED);
+            this->setBadgeParts("GDDL not rated", "", BADGE_MUTED, BADGE_MUTED);
             return;
         }
+
+        auto ratingText = fmt::format("({:.2f})", info.rating);
+        auto ratingTint = gddl::ratingColor(info.rating);
         if (info.rank <= 0) {
-            this->setBadgeText(fmt::format("GDDL {:.2f}", info.rating), BADGE_COLOR);
+            this->setBadgeParts("GDDL", ratingText, BADGE_COLOR, ratingTint);
             return;
         }
-        this->setBadgeText(fmt::format("GDDL #{} ({:.2f})", info.rank, info.rating), BADGE_COLOR);
+        this->setBadgeParts(fmt::format("GDDL #{}", info.rank), ratingText, BADGE_COLOR, ratingTint);
     }
 
     void onBadgeClick(CCObject*) {

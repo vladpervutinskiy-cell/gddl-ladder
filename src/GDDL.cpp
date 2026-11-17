@@ -2,6 +2,8 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 using namespace geode::prelude;
@@ -55,6 +57,25 @@ namespace gddl {
             return text.substr(0, maxLength);
         }
         return text.substr(0, maxLength - 2) + "..";
+    }
+
+    cocos2d::ccColor3B ratingColor(double rating) {
+        auto mix = [](unsigned char from, unsigned char to, float t) -> unsigned char {
+            float value = static_cast<float>(from) + (static_cast<float>(to) - static_cast<float>(from)) * t;
+            return static_cast<unsigned char>(std::clamp(std::lround(value), 0L, 255L));
+        };
+        auto lerp = [&mix](cocos2d::ccColor3B const& from, cocos2d::ccColor3B const& to, float t) {
+            return cocos2d::ccColor3B{mix(from.r, to.r, t), mix(from.g, to.g, t), mix(from.b, to.b, t)};
+        };
+
+        float t = std::clamp(static_cast<float>(rating / 39.0), 0.f, 1.f);
+        cocos2d::ccColor3B const low{120, 230, 120};
+        cocos2d::ccColor3B const mid{255, 235, 120};
+        cocos2d::ccColor3B const high{255, 110, 110};
+        if (t < 0.5f) {
+            return lerp(low, mid, t * 2.f);
+        }
+        return lerp(mid, high, (t - 0.5f) * 2.f);
     }
 
     Client& Client::get() {

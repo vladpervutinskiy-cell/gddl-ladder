@@ -23,26 +23,6 @@ namespace {
     cocos2d::ccColor3B const HEADER_COLOR{190, 190, 190};
     cocos2d::ccColor3B const MUTED_COLOR{200, 200, 200};
 
-    cocos2d::ccColor3B lerpColor(cocos2d::ccColor3B const& from, cocos2d::ccColor3B const& to, float t) {
-        auto mix = [t](unsigned char a, unsigned char b) -> unsigned char {
-            float value = static_cast<float>(a) + (static_cast<float>(b) - static_cast<float>(a)) * t;
-            return static_cast<unsigned char>(std::clamp(std::lround(value), 0L, 255L));
-        };
-        return {mix(from.r, to.r), mix(from.g, to.g), mix(from.b, to.b)};
-    }
-
-    /// Green for easy demons, yellow in the middle, red for the hardest ones.
-    cocos2d::ccColor3B ratingColor(double rating) {
-        float t = std::clamp(static_cast<float>(rating / 39.0), 0.f, 1.f);
-        cocos2d::ccColor3B const low{120, 230, 120};
-        cocos2d::ccColor3B const mid{255, 235, 120};
-        cocos2d::ccColor3B const high{255, 110, 110};
-        if (t < 0.5f) {
-            return lerpColor(low, mid, t * 2.f);
-        }
-        return lerpColor(mid, high, (t - 0.5f) * 2.f);
-    }
-
     /// Three columns: rank, "level - creator", rating. Coordinates are in the
     /// 0..rowWidth space of the node; CCMenuItemSprite anchors item contents
     /// at their bottom-left corner.
@@ -152,14 +132,24 @@ bool GDDLTopPopup::init() {
     infoItem->setPosition({popupWidth / 2.f, 20.f});
     m_buttonMenu->addChild(infoItem);
 
-    auto prevSprite = ButtonSprite::create("PREV", "bigFont.fnt", "GJ_button_02.png", 0.55f);
-    m_prevBtn = CCMenuItemSpriteExtra::create(prevSprite, this, menu_selector(GDDLTopPopup::onPrev));
-    m_prevBtn->setPosition({48.f, 20.f});
-    m_buttonMenu->addChild(m_prevBtn);
+    // Prev/Next are deliberately compact: they only hold a word each, so they
+    // are laid out from their real width instead of fixed coordinates.
+    constexpr float NAV_SCALE = 0.4f;
+    constexpr float NAV_GAP = 6.f;
+    constexpr float NAV_BOTTOM = 19.f;
+    float navX = 14.f;
 
-    auto nextSprite = ButtonSprite::create("NEXT", "bigFont.fnt", "GJ_button_02.png", 0.55f);
+    auto prevSprite = ButtonSprite::create("PREV", "bigFont.fnt", "GJ_button_02.png", NAV_SCALE);
+    m_prevBtn = CCMenuItemSpriteExtra::create(prevSprite, this, menu_selector(GDDLTopPopup::onPrev));
+    float prevWidth = prevSprite->getContentSize().width * prevSprite->getScale();
+    m_prevBtn->setPosition({navX + prevWidth / 2.f, NAV_BOTTOM});
+    m_buttonMenu->addChild(m_prevBtn);
+    navX += prevWidth + NAV_GAP;
+
+    auto nextSprite = ButtonSprite::create("NEXT", "bigFont.fnt", "GJ_button_02.png", NAV_SCALE);
     m_nextBtn = CCMenuItemSpriteExtra::create(nextSprite, this, menu_selector(GDDLTopPopup::onNext));
-    m_nextBtn->setPosition({104.f, 20.f});
+    float nextWidth = nextSprite->getContentSize().width * nextSprite->getScale();
+    m_nextBtn->setPosition({navX + nextWidth / 2.f, NAV_BOTTOM});
     m_buttonMenu->addChild(m_nextBtn);
 
     auto siteSprite = ButtonSprite::create("OPEN GDDL", "bigFont.fnt", "GJ_button_01.png", 0.5f);
@@ -270,7 +260,7 @@ void GDDLTopPopup::applyPage(gddl::Page const& data) {
     std::vector<int> missing;
     for (int i = 0; i < static_cast<int>(data.rows.size()); ++i) {
         auto const& row = data.rows[i];
-        auto color = ratingColor(row.rating);
+        auto color = gddl::ratingColor(row.rating);
         auto cached = gddl::Client::get().getRank(row.id);
         std::string rankText = "#..";
         if (cached) {

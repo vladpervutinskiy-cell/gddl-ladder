@@ -58,6 +58,10 @@ namespace gddl {
     /// Shortens `text` to `maxLength` characters, appending ".." when cut.
     std::string truncate(std::string const& text, std::size_t maxLength);
 
+    /// Green for easy demons, yellow in the middle and red for the hardest
+    /// ones. Shared by the top list and the level badge.
+    cocos2d::ccColor3B ratingColor(double rating);
+
     /// In-memory cache shared by all UI elements.
     class Client {
     public:
